@@ -1,7 +1,5 @@
-dolmatch
-
-By Max Parisi
-github.com/mparisi20
+# dolmatch 
+###### by Max Parisi
 
 This program searches for identical strings of object code within the .text section of two DOLs, 
 while trying its best to ignore differences due only to link-time relocation.
