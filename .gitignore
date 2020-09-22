@@ -1,11 +1,7 @@
 *.dol
-
 *.map
-
 *.txt
-
 *.out
-
 *.o
-
 *.py
+dolmatch

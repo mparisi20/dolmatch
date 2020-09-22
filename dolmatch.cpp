@@ -17,6 +17,7 @@ github.com/mparisi20
 
 using namespace std;
 
+typedef int32_t s32;
 typedef uint32_t u32;
 typedef unsigned char u8;
 
@@ -24,13 +25,13 @@ struct SymInfo {
     u32 absAddr;
     u32 size;
     string name;
+    string module;
     
-    SymInfo(u32 addr, u32 sz, string nm) 
-        : absAddr(addr), size(sz), name(nm) { }
+    SymInfo(u32 addr, u32 sz, string nm, string mod) 
+        : absAddr(addr), size(sz), name(nm), module(mod) { }
 };
 
-u32 be32_to_cpu(const u8 *buf)
-{
+u32 be32_to_cpu(const u8 *buf) {
     return (u32)buf[3] | (u32)buf[2] << 8 | (u32)buf[1] << 16 | (u32)buf[0] << 24;
 }
 
@@ -55,8 +56,7 @@ static inline void trim(std::string &s) {
     rtrim(s);
 }
 
-class PPCInstruction
-{
+class PPCInstruction {
     enum Opcode : u8
     {
         addi = 14,
@@ -148,8 +148,7 @@ public:
     }
 };
 
-class DolTextSection
-{
+class DolTextSection {
     // assume section index 1 is the .text section of both DOLs
     static const u32 textIndex = 1;
     static const u32 scaledIndex = sizeof(u32) * textIndex;
@@ -228,7 +227,7 @@ public:
     // patched by the linker as part of relocation. Disregarding 
     // differences only due to relocation allows more matches to 
     // be found between the compared DOLs.
-    void clearRelocationPatches()
+    void clearRelocatedFields()
     {
         for (size_t i = 0; i < numInstrs; i++) {
             // load big endian word into small endian arch
@@ -265,8 +264,8 @@ vector<SymInfo> parseMapFile(const char *fname)
     ifstream mapFile(fname);
     vector<SymInfo> symbolInfos;
     string line;
-    for (size_t i = 0; getline(mapFile, line); i++) {
-        stringstream ss(line);
+    while (getline(mapFile, line)) {
+        istringstream ss(line);
         u32 discard;
         u32 absAddr, size;
         string name;
@@ -277,37 +276,110 @@ vector<SymInfo> parseMapFile(const char *fname)
         }
         if (!ss.fail()) {
             trim(name);
-            symbolInfos.push_back(SymInfo(absAddr, size, name));
+            symbolInfos.push_back(SymInfo(absAddr, size, name, ""));
         }
+    }
+    return symbolInfos;
+}
+
+class MapFile {
+    struct MapFileLine {
+        u32 addr;
+        string symbol;
+        MapFileLine(u32 a, string sym) : addr(a), symbol(sym) { }
+        
+        bool operator<(const MapFileLine& other) const {
+            return addr < other.addr;
+        }
+    };
+public:
+    vector<MapFileLine> lines;
+    
+    MapFile(const char *fname)
+    {
+        ifstream mapFile(fname);
+        string line, sym;
+        u32 addr;
+        while (getline(mapFile, line)) {
+            istringstream ss(line);
+            ss >> hex >> addr;
+            getline(ss, sym);
+            trim(sym);
+            lines.push_back(MapFileLine(addr, sym));
+        }
+        sort(lines.begin(), lines.end());
+    }
+};
+
+// parse the map file format found in Brawl
+vector<SymInfo> parseMapFile2(const char *fname)
+{
+    MapFile map(fname);
+    vector<SymInfo> symbolInfos;
+    string line, nextLine;
+    
+    for (u32 i = 0; i+1 < map.lines.size(); i++) {
+        istringstream ss(map.lines[i].symbol);
+        char discardChar;
+        u32 size;
+        string funcName(""), className(""), moduleName("");
+        size = map.lines[i+1].addr - map.lines[i].addr;
+        getline(ss, funcName, '/');
+        trim(funcName);
+        if (ss.peek() == '[') {
+            ss.read(&discardChar, 1);
+            getline(ss, className, ']');
+            ss.read(&discardChar, 1);
+        }
+        ss.read(&discardChar, 1);
+        getline(ss, moduleName, ')');
+        symbolInfos.push_back(
+            SymInfo(
+                map.lines[i].addr, 
+                size, 
+                (className != "") ? className + "." + funcName : funcName, 
+                moduleName
+            )
+        );
+    }
+    if (map.lines.size() != 0) {
+        // TODO: push the final symbol, setting its size to 4 (since there's no next symbol
+        // to compute the size from)
+        //symbolInfos.push_back(SymInfo(
     }
     return symbolInfos;
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc != 4) {
-        cerr << "usage: ./dolmatch <searchSymMap>.map <searchDol>.dol <targetDol>.dol" << endl;
+    int mapType;
+    if (argc != 5 || !((mapType = atoi(argv[2])) == 1 || mapType == 2)) {
+        cerr << "usage: ./dolmatch <searchSymMap>.map <mapType> <searchDol>.dol <targetDol>.dol" << endl;
+        cerr << "Supported mapTypes:\n\t1: Dolphin MAP file\n\t2: Brawl format map file" << endl;
         return EXIT_FAILURE;
     }
+
+    vector<SymInfo> symbolInfos;
+    if (mapType == 1) {
+        symbolInfos = parseMapFile(argv[1]);
+    } else if (mapType == 2) {
+        symbolInfos = parseMapFile2(argv[1]);
+    }
+    DolTextSection searchDolText(argv[3]);
+    DolTextSection targetDolText(argv[4]);
     
-    vector<SymInfo> symbolInfos = parseMapFile(argv[1]);
-    DolTextSection searchDolText(argv[2]);
-    DolTextSection targetDolText(argv[3]);
-    
-    searchDolText.clearRelocationPatches();
-    targetDolText.clearRelocationPatches();
+    searchDolText.clearRelocatedFields();
+    targetDolText.clearRelocatedFields();
     
     vector<PPCInstruction> searchFunc;
-    cout << "Begin search for identical functions between " << argv[2] << " and " << argv[3] << ":\n" << endl;
-    cout << "Symbol_Name\t" << argv[2] << "_Address\t" << argv[3] << "_Address\t" << "Func_Size" << endl;
+    cout << "Begin search for identical functions between " << argv[3] << " and " << argv[4] << ":\n" << endl;
+    cout << "Symbol_Name\t" << argv[3] << "_Address\t" << argv[4] << "_Address\t" << "Func_Size" << endl;
     u32 matchCount = 0;
     u32 totalMatchSize = 0;
     for (auto sym : symbolInfos) {
         if (sym.absAddr < searchDolText.getAbsAddr() || 
             sym.absAddr >= searchDolText.getAbsAddr() + searchDolText.getSize()) {
-            cout << hex << "NOTE: " << sym.name << " is not in the .text section (" << sym.absAddr <<
-                " not in [" << searchDolText.getAbsAddr() << ", " << 
-                searchDolText.getAbsAddr() + searchDolText.getSize() << ")" << endl;
+            cout << hex << "NOTE: " << sym.name << " is not in the .text section" << endl;
             continue;
         }
         
@@ -336,8 +408,8 @@ int main(int argc, char *argv[])
     // Do multiple passes until no new matches are found
     
     cout << "\n\nFound " << dec << matchCount 
-        << " possibly identical functions between " << argv[1] << " and " 
-        << argv[3] << " (0x" << hex << totalMatchSize << " bytes total, " << dec << setprecision(3) 
+        << " possibly identical functions between " << argv[3] << " and " 
+        << argv[4] << " (0x" << hex << totalMatchSize << " bytes total, " << dec << setprecision(3) 
         << 100.0 * (totalMatchSize*1.0 / targetDolText.getSize()) << "% of " << argv[3] << "\'s .text section)" << endl;
     return 0;
 }
