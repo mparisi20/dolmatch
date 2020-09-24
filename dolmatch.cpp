@@ -66,8 +66,10 @@ class PPCInstruction {
         sth = 44,
         lhz = 40,
         lha = 42,
+        lwzu = 33,
         stb = 38,
         lbz = 34,
+        stwu = 37,
         b_x = 18,
         lfs = 48,
         lfd = 50,
@@ -116,7 +118,8 @@ public:
     }
     
     // TODO: What other opcodes should this function look for?
-    bool isLoadStoreDisplacement() const {
+    bool isLoadStoreDisplacement(bool *updated) const {
+        *updated = false;
         switch (opcode()) {
             case stw: case lwz:
             case sth: case lhz:
@@ -124,6 +127,10 @@ public:
             case lha: case lfd:
             case stfd: case lfs:
             case stfs:
+                return true;
+            case stwu:
+            case lwzu:
+                *updated = true;
                 return true;
         }
         return false;
@@ -139,8 +146,8 @@ public:
     // areas; or retrieving a pointer from the R2 or R13 SDAs
     // TODO: returning true for addi instructions using R0 creates a conflict with
     // li instructions... Leaving it out for now.
-    bool isSDALoadStoreOrAddi() const {
-        return (isLoadStoreDisplacement() &&
+    bool isSDALoadStoreOrAddi(bool *updated) const {
+        return (isLoadStoreDisplacement(updated) &&
                  (a_reg() == 13 || 
                   a_reg() == 2 || 
                   a_reg() == 0)
@@ -229,12 +236,13 @@ public:
     // be found between the compared DOLs.
     void clearRelocatedFields()
     {
+        bool updated;
         for (size_t i = 0; i < numInstrs; i++) {
             // load big endian word into small endian arch
             PPCInstruction& instr = instrBuf[i];
             if (instr.isBranch()) {
                 instr.clearLIField();
-            } else if (instr.isSDALoadStoreOrAddi()) {
+            } else if (instr.isSDALoadStoreOrAddi(&updated)) {
                 instr.clearDispField();
             } else if (instr.isLisInstr()) {
                 u8 lisReg = instr.d_reg();
@@ -246,10 +254,10 @@ public:
                     PPCInstruction& nextInstr = instrBuf[j];
                     if (nextInstr.isLisInstr() && nextInstr.d_reg() == lisReg)
                         break;
-                    if ((nextInstr.isLoadStoreDisplacement() && nextInstr.a_reg() == lisReg)
+                    if ((nextInstr.isLoadStoreDisplacement(&updated) && nextInstr.a_reg() == lisReg)
                             || nextInstr.isAddiReg(lisReg)) {
                         nextInstr.clearDispField();
-                        if (nextInstr.d_reg() == lisReg) break;
+                        if (updated || nextInstr.d_reg() == lisReg) break;
                     }
                 }
             }
