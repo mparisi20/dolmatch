@@ -410,6 +410,6 @@ int main(int argc, char *argv[])
     cout << "\n\nFound " << dec << matchCount 
         << " possibly identical functions between " << argv[3] << " and " 
         << argv[4] << " (0x" << hex << totalMatchSize << " bytes total, " << dec << setprecision(3) 
-        << 100.0 * (totalMatchSize*1.0 / targetDolText.getSize()) << "% of " << argv[3] << "\'s .text section)" << endl;
+        << 100.0 * (totalMatchSize*1.0 / targetDolText.getSize()) << "% of " << argv[4] << "\'s .text section)" << endl;
     return 0;
 }
