@@ -61,6 +61,7 @@ class PPCInstruction {
     {
         addi = 14,
         addis = 15,
+        bc = 16,
         ori = 24,
         stw = 36,
         lwz = 32,
@@ -104,6 +105,18 @@ public:
         instr &= 0xfc000003;
     }
     
+    // get the signed displacement encoded in a branch instruction
+    s32 getLIDisp() const
+    {
+        return (instr & 0x03fffffc) | ((instr & 0x02000000) ? 0xfc000000 : 0);
+    }
+    
+    // get the signed displacement encoded in a conditional branch instruction
+    s32 getBDDisp() const
+    {
+        return (instr & 0x0000fffc) | ((instr & 0x00008000) ? 0xffff0000 : 0);
+    }
+    
     void clearDispField()
     {
         instr &= 0xffff0000;
@@ -116,6 +129,24 @@ public:
     // bl, b, bla, ba
     bool isBranch() const {
         return opcode() == Opcode::b_x;
+    }
+    
+    bool isBranchCond() const {
+        return opcode() == Opcode::bc;
+    }
+    
+    // b instruction
+    bool isB() const {
+        return isBranch() && !((instr & 0x2 == 1) || (instr & 0x1 == 1));
+    }
+    
+    // beq, bne, blt, etc
+    bool isBc() const {
+        return isBranchCond() && !((instr & 0x2 == 1) || (instr & 0x1 == 1));
+    }
+    
+    bool isBlr() const {
+        return instr == 0x4e800020;
     }
     
     // TODO: What other opcodes should this function look for?
@@ -163,7 +194,6 @@ class DolTextSection {
     static const u32 offSctOffsets = 0;
     static const u32 offSctAddrs = 0x48;
     static const u32 offSctLens = 0x90;
-    static const u32 lookAhead = 100; // TODO: design a better strategy than a constant instruction look-ahead
     FILE *dol;
     u32 textOffset;
     u32 size; // of section in bytes
@@ -248,18 +278,28 @@ public:
             } else if (instr.isLisInstr()) {
                 u8 lisReg = instr.d_reg();
                 instr.clearDispField();
+                s32 skipBlr = 0; // skip ahead amount for functions that continue after a blr
                 // Clear disp of adds, loads, stores somewhat later in the code that
                 // use the same register that lis loaded.
                 // Not a perfect solution, but should help find more matches
-                for (size_t j = i+1; j < numInstrs && (j-i) <= lookAhead; j++) {
+                for (size_t j = i+1; j < numInstrs; j++) {
                     PPCInstruction& nextInstr = instrBuf[j];
+                    if (nextInstr.isB() && nextInstr.getLIDisp() > skipBlr) {
+                        skipBlr = nextInstr.getLIDisp();
+                    } else if (nextInstr.isBc() && nextInstr.getBDDisp() > skipBlr) {
+                        skipBlr = nextInstr.getBDDisp();
+                    }
                     if (nextInstr.isLisInstr() && nextInstr.d_reg() == lisReg)
+                        break;
+                    if (nextInstr.isBlr() && skipBlr == 0) // try to avoid stepping into other functions
                         break;
                     if ((nextInstr.isLoadStoreDisplacement(&updated) && nextInstr.a_reg() == lisReg)
                             || nextInstr.isAddiReg(lisReg)) {
                         nextInstr.clearDispField();
                         if (updated || nextInstr.d_reg() == lisReg) break;
                     }
+                    // decrement
+                    if (skipBlr != 0) skipBlr -= sizeof(PPCInstruction);
                 }
             }
         }

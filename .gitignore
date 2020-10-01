@@ -8,4 +8,5 @@ dolmatch
 *.MAP
 *.SMAP
 *.sh
+*.dump
 
