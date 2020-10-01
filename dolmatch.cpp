@@ -269,7 +269,6 @@ public:
     {
         bool updated;
         for (size_t i = 0; i < numInstrs; i++) {
-            // load big endian word into small endian arch
             PPCInstruction& instr = instrBuf[i];
             if (instr.isBranch()) {
                 instr.clearLIField();
