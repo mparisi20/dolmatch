@@ -62,21 +62,30 @@ class PPCInstruction {
         addi = 14,
         addis = 15,
         bc = 16,
-        ori = 24,
-        stw = 36,
-        lwz = 32,
-        sth = 44,
-        lhz = 40,
-        lha = 42,
-        lwzu = 33,
-        stb = 38,
-        lbz = 34,
-        stwu = 37,
         b_x = 18,
+        ori = 24,
+        lwz = 32,
+        lwzu = 33,
+        lbz = 34,
+        lbzu = 35,
+        stw = 36,
+        stwu = 37,
+        stb = 38,
+        stbu = 39,
+        lhz = 40,
+        lhzu = 41,
+        lha = 42,
+        lhau = 43,
+        sth = 44,
+        sthu = 45,
         lfs = 48,
+        lfsu = 49,
         lfd = 50,
+        lfdu = 51,
         stfs = 52,
-        stfd = 54
+        stfsu = 53,
+        stfd = 54,
+        stfdu = 55
     };
 
     u32 instr;
@@ -160,8 +169,12 @@ public:
             case stfd: case lfs:
             case stfs:
                 return true;
-            case stwu:
-            case lwzu:
+            case stwu: case stbu:
+            case lwzu: case lbzu:
+            case lhzu: case lhau:
+            case sthu: case lfsu:
+            case lfdu: case stfsu:
+            case stfdu:
                 *updated = true;
                 return true;
         }
