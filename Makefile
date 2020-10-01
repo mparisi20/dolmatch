@@ -1,5 +1,5 @@
 CXX := g++
-CXXFLAGS := -O4 -std=c++11
+CXXFLAGS := -O3 -std=c++11
 
 ifeq ($(OS),Windows_NT)
 EXE := .exe

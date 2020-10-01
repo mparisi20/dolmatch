@@ -61,6 +61,7 @@ class PPCInstruction {
     {
         addi = 14,
         addis = 15,
+        ori = 24,
         stw = 36,
         lwz = 32,
         sth = 44,
@@ -139,7 +140,7 @@ public:
     // Indicate whether this is an addi instruction using the
     // specified base register (helpful for finding static data accesses)
     bool isAddiReg(u8 reg) const {
-        return opcode() == Opcode::addi && reg == a_reg();
+        return (opcode() == Opcode::addi || opcode() == Opcode::ori) && reg == a_reg();
     }
 
     // Indicate whether this instruction is a load or store involving one of the small data

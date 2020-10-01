@@ -5,3 +5,7 @@
 *.o
 *.py
 dolmatch
+*.MAP
+*.SMAP
+*.sh
+
