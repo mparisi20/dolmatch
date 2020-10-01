@@ -78,6 +78,8 @@ class PPCInstruction {
         lhau = 43,
         sth = 44,
         sthu = 45,
+        lmw = 46,
+        stmw = 47,
         lfs = 48,
         lfsu = 49,
         lfd = 50,
@@ -167,7 +169,8 @@ public:
             case lbz: case stb:
             case lha: case lfd:
             case stfd: case lfs:
-            case stfs:
+            case stfs: case lmw:
+            case stmw:
                 return true;
             case stwu: case stbu:
             case lwzu: case lbzu:
