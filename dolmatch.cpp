@@ -93,7 +93,9 @@ class PPCInstruction {
     u32 instr;
 public:
     PPCInstruction(const u8 *pInstr) : instr(be32_to_cpu(pInstr)) { }
-
+    
+    friend ostream& operator<<(ostream& s, const PPCInstruction& p);
+    
     bool operator==(const PPCInstruction& other) const
     {
         return instr == other.instr;
@@ -203,6 +205,12 @@ public:
     }
 };
 
+ostream& operator<<(ostream& s, const PPCInstruction& p)
+{
+    s << (p.instr>>24) << " " << (p.instr>>16 & 0xff) << " " << (p.instr>>8 & 0xff)
+        << " " << (p.instr & 0xff) << endl;
+}
+
 class DolTextSection {
     // assume section index 1 is the .text section of both DOLs
     static const u32 textIndex = 1;
@@ -306,12 +314,15 @@ public:
                     }
                     if (nextInstr.isLisInstr() && nextInstr.d_reg() == lisReg)
                         break;
-                    if (nextInstr.isBlr() && skipBlr == 0) // try to avoid stepping into other functions
+                    if (nextInstr.isBlr() && skipBlr == 0) {// try to avoid stepping into other functions
                         break;
+                    }
                     if ((nextInstr.isLoadStoreDisplacement(&updated) && nextInstr.a_reg() == lisReg)
                             || nextInstr.isAddiReg(lisReg)) {
                         nextInstr.clearDispField();
-                        if (updated || nextInstr.d_reg() == lisReg) break;
+                        if (updated || nextInstr.d_reg() == lisReg) {
+                            break;
+                        }
                     }
                     // decrement
                     if (skipBlr != 0) skipBlr -= sizeof(PPCInstruction);
@@ -414,6 +425,18 @@ vector<SymInfo> parseMapFile2(const char *fname)
     return symbolInfos;
 }
 
+void debugDump(const DolTextSection& s1, const DolTextSection& s2, u32 addr1, u32 addr2, u32 size)
+{
+    ofstream f1("f1.dump"), f2("f2.dump");
+    u32 offset1 = (addr1 - s1.getAbsAddr())/sizeof(PPCInstruction);
+    u32 offset2 = (addr2 - s2.getAbsAddr())/sizeof(PPCInstruction);
+    for (size_t i = 0; i < size/sizeof(PPCInstruction); i++) {
+        f1 << hex << s1.instrBuf[offset1 + i];
+        f2 << hex << s2.instrBuf[offset2 + i];
+    }
+}
+
+
 int main(int argc, char *argv[])
 {
     int mapType;
@@ -434,6 +457,9 @@ int main(int argc, char *argv[])
     
     searchDolText.clearRelocatedFields();
     targetDolText.clearRelocatedFields();
+    
+    // DEBUG
+    // debugDump(searchDolText, targetDolText, 0x801dc120, 0x8026dbc8, 0x1a4);
     
     vector<PPCInstruction> searchFunc;
     cout << "Begin search for identical functions between " << argv[3] << " and " << argv[4] << ":\n" << endl;
@@ -460,6 +486,10 @@ int main(int argc, char *argv[])
             cout << sym.name << " " << hex << sym.absAddr << " " << foundFuncAddr << " " << sym.size << "\n";
             matchCount++;
             totalMatchSize += sym.size;
+        } else {
+            if (sym.absAddr == 0x801dc120) {
+                cerr << "no match found for " << sym.name << endl;
+            }
         }
     }
     
