@@ -57,8 +57,12 @@ static inline void trim(std::string &s) {
 }
 
 class PPCInstruction {
+    u32 instr;
+public:
     enum Opcode : u8
     {
+        addic = 12,
+        addic_r = 13,
         addi = 14,
         addis = 15,
         bc = 16,
@@ -90,8 +94,6 @@ class PPCInstruction {
         stfdu = 55
     };
 
-    u32 instr;
-public:
     PPCInstruction(const u8 *pInstr) : instr(be32_to_cpu(pInstr)) { }
     
     friend ostream& operator<<(ostream& s, const PPCInstruction& p);
@@ -186,10 +188,16 @@ public:
         return false;
     }
 
-    // Indicate whether this is an addi instruction using the
+    // Indicate whether this is an addi (or similar) instruction using the
     // specified base register (helpful for finding static data accesses)
     bool isAddiReg(u8 reg) const {
-        return (opcode() == Opcode::addi || opcode() == Opcode::ori) && reg == a_reg();
+        switch (opcode()) {
+            case addi: case ori:
+            case addic: case addic_r:
+                return reg == a_reg();
+            default:
+                return false;
+        }
     }
 
     // Indicate whether this instruction is a load or store involving one of the small data
@@ -318,10 +326,13 @@ public:
                         break;
                     }
                     if ((nextInstr.isLoadStoreDisplacement(&updated) && nextInstr.a_reg() == lisReg)
-                            || nextInstr.isAddiReg(lisReg)) {
+                        || nextInstr.isAddiReg(lisReg)) {
                         nextInstr.clearDispField();
                         if (updated || nextInstr.d_reg() == lisReg) {
-                            break;
+                            if (!(nextInstr.opcode() == PPCInstruction::Opcode::addi 
+                                && nextInstr.a_reg() == lisReg)) {
+                                break;
+                            }
                         }
                     }
                     // decrement
@@ -431,8 +442,8 @@ void debugDump(const DolTextSection& s1, const DolTextSection& s2, u32 addr1, u3
     u32 offset1 = (addr1 - s1.getAbsAddr())/sizeof(PPCInstruction);
     u32 offset2 = (addr2 - s2.getAbsAddr())/sizeof(PPCInstruction);
     for (size_t i = 0; i < size/sizeof(PPCInstruction); i++) {
-        f1 << hex << s1.instrBuf[offset1 + i];
-        f2 << hex << s2.instrBuf[offset2 + i];
+        f1 << hex << addr1 + i*sizeof(PPCInstruction) << ": " << setfill('0') << setw(2) << right << s1.instrBuf[offset1 + i];
+        f2 << hex << addr2 + i*sizeof(PPCInstruction) << ": " << setfill('0') << setw(2) << right << s2.instrBuf[offset2 + i];
     }
 }
 
@@ -458,8 +469,9 @@ int main(int argc, char *argv[])
     searchDolText.clearRelocatedFields();
     targetDolText.clearRelocatedFields();
     
-    // DEBUG
-    // debugDump(searchDolText, targetDolText, 0x801dc120, 0x8026dbc8, 0x1a4);
+    #if 1 // DEBUG
+        debugDump(searchDolText, targetDolText, 0x801ede0c, 0x8027dedc, 0x910);
+    #endif
     
     vector<PPCInstruction> searchFunc;
     cout << "Begin search for identical functions between " << argv[3] << " and " << argv[4] << ":\n" << endl;
@@ -486,10 +498,6 @@ int main(int argc, char *argv[])
             cout << sym.name << " " << hex << sym.absAddr << " " << foundFuncAddr << " " << sym.size << "\n";
             matchCount++;
             totalMatchSize += sym.size;
-        } else {
-            if (sym.absAddr == 0x801dc120) {
-                cerr << "no match found for " << sym.name << endl;
-            }
         }
     }
     
