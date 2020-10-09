@@ -30,6 +30,10 @@ struct SymInfo {
     
     SymInfo(u32 addr, u32 sz, string nm, string mod) 
         : absAddr(addr), size(sz), name(nm), module(mod) { }
+    
+    bool operator<(const SymInfo& other) const {
+        return absAddr < other.absAddr;
+    }
 };
 
 u32 swap32(u32 word) {
@@ -461,6 +465,7 @@ public:
                 result.push_back(info);
             }
         }
+        sort(result.begin(), result.end());
         return result;
     }
 
