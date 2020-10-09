@@ -1,25 +1,26 @@
-/*
-dolmatch
-
-By Max Parisi
-github.com/mparisi20
-*/
-
-#include <cstdlib>
-#include <cinttypes>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <inttypes.h>
+#include "elf.h"
+#include <ctype.h>
+#include <string>
 #include <iostream>
+#include <algorithm>
+#include <iomanip>
+#include <vector>
 #include <string>
 #include <sstream>
 #include <fstream>
-#include <algorithm> 
-#include <vector>
-#include <iomanip>
 
 using namespace std;
 
-typedef int32_t s32;
 typedef uint32_t u32;
+typedef int32_t s32;
+typedef uint16_t u16;
+typedef int16_t s16;
 typedef unsigned char u8;
+typedef signed char s8;
 
 struct SymInfo {
     u32 absAddr;
@@ -30,6 +31,17 @@ struct SymInfo {
     SymInfo(u32 addr, u32 sz, string nm, string mod) 
         : absAddr(addr), size(sz), name(nm), module(mod) { }
 };
+
+u32 swap32(u32 word) {
+	return word >> 24 | 
+        (word >> 8 & 0xff00) | 
+		(word << 8 & 0xff0000) |
+		word << 24; 
+}
+
+u16 swap16(u16 hword) {
+	return hword >> 8 | hword << 8;
+}
 
 u32 be32_to_cpu(const u8 *buf) {
     return (u32)buf[3] | (u32)buf[2] << 8 | (u32)buf[1] << 16 | (u32)buf[0] << 24;
@@ -56,7 +68,7 @@ static inline void trim(std::string &s) {
     rtrim(s);
 }
 
-class PPCInstruction {
+class PPCInstr {
     u32 instr;
 public:
     enum Opcode : u8
@@ -94,11 +106,11 @@ public:
         stfdu = 55
     };
 
-    PPCInstruction(const u8 *pInstr) : instr(be32_to_cpu(pInstr)) { }
+    PPCInstr(const unsigned char *pInstr) : instr(be32_to_cpu(pInstr)) { }
     
-    friend ostream& operator<<(ostream& s, const PPCInstruction& p);
+    friend ostream& operator<<(ostream& s, const PPCInstr& p);
     
-    bool operator==(const PPCInstruction& other) const
+    bool operator==(const PPCInstr& other) const
     {
         return instr == other.instr;
     }
@@ -135,6 +147,11 @@ public:
     void clearDispField()
     {
         instr &= 0xffff0000;
+    }
+    
+    void clearAReg()
+    {
+        instr &= 0xffe0ffff;
     }
 
     bool isLisInstr() const {
@@ -213,86 +230,64 @@ public:
     }
 };
 
-ostream& operator<<(ostream& s, const PPCInstruction& p)
+ostream& operator<<(ostream& s, const PPCInstr& p)
 {
     s << (p.instr>>24) << " " << (p.instr>>16 & 0xff) << " " << (p.instr>>8 & 0xff)
         << " " << (p.instr & 0xff) << endl;
 }
 
-class DolTextSection {
-    // assume section index 1 is the .text section of both DOLs
-    static const u32 textIndex = 1;
-    static const u32 scaledIndex = sizeof(u32) * textIndex;
-    static const u32 offSctOffsets = 0;
-    static const u32 offSctAddrs = 0x48;
-    static const u32 offSctLens = 0x90;
-    FILE *dol;
-    u32 textOffset;
-    u32 size; // of section in bytes
+class TextSection {
+protected:
+    unsigned char *fileBuf;
+    u32 textIndex;
     u32 numInstrs;
-    u32 absAddr;
+    u32 baseAddr;
     
-    void tryOpenDol(const char *name, const char *mode)
+    // Loads contents of file at path into fileBuf. Derived classes 
+    // must complete the initialization
+    TextSection(const char *path)
     {
-        dol = fopen(name, mode);
-        if (!dol) {
-            cerr << "failed to open file " << name << endl;
+        FILE *fp = fopen(path, "rb");
+        if (!fp) {
+            fprintf(stderr, "ERROR: cannot open file '%s'\n", path);
             exit(EXIT_FAILURE);
         }
-    }
-    
-    void tryReadDol(long offset, void *ptr, size_t size, size_t nmemb)
-    {
-        fseek(dol, offset, SEEK_SET);
-        if (fread(ptr, size, nmemb, dol) != nmemb) {
-            cerr << "fread error\n";
+        
+        fseek(fp, 0, SEEK_END);
+        u32 fileSz = ftell(fp);
+        rewind(fp);
+        
+        fileBuf = new unsigned char[fileSz];
+        if (!fileBuf) {
+            fprintf(stderr, "ERROR: failed to malloc fileBuf\n");
             exit(EXIT_FAILURE);
         }
+        
+        if (fread(fileBuf, fileSz, 1, fp) != 1) {
+            fprintf(stderr, "ERROR: cannot read file '%s'\n", path);
+            delete[] fileBuf;
+            exit(EXIT_FAILURE);
+        }
+        
+        fclose(fp);
     }
-
+    
 public:
-    vector<PPCInstruction> instrBuf;
+    vector<PPCInstr> instrBuf;
     
-    DolTextSection(const DolTextSection& orig) = delete;
-    DolTextSection& operator=(const DolTextSection& orig) = delete;
-
-    // Open the specified DOL and read in its .text section's file offset, size, 
-    // address, and contents while converting to native endianness
-    DolTextSection(const char *dolName)
+    virtual ~TextSection()
     {
-        tryOpenDol(dolName, "rb");
-        
-        tryReadDol(offSctOffsets + scaledIndex, &textOffset, sizeof(u32), 1);
-        textOffset = be32_to_cpu((const u8 *)&textOffset);
-        
-        tryReadDol(offSctLens + scaledIndex, &size, sizeof(u32), 1);
-        size = be32_to_cpu((const u8 *)&size);
-        numInstrs = size / sizeof(PPCInstruction);
-        
-        tryReadDol(offSctAddrs + scaledIndex, &absAddr, sizeof(u32), 1);
-        absAddr = be32_to_cpu((const u8 *)&absAddr);
-
-        u8 *rawBuf = new u8[size];
-        tryReadDol(textOffset, rawBuf, sizeof(u8), size);
-        
-        for (size_t i = 0; i < size; i += sizeof(PPCInstruction))
-            instrBuf.push_back(PPCInstruction(rawBuf + i));
-        
-        delete[] rawBuf;
+        delete[] fileBuf;
+    }
+    
+    u32 getBaseAddr() const {
+        return baseAddr;
+    }
+    
+    u32 getNumInstrs() const {
+        return numInstrs;
     }
 
-    ~DolTextSection() {
-        fclose(dol);
-    }
-    
-    u32 getAbsAddr() const {
-        return absAddr;
-    }
-    
-    u32 getSize() const {
-        return size;
-    }
-    
     // Attempt to clear any instruction fields whose values are 
     // patched by the linker as part of relocation. Disregarding 
     // differences only due to relocation allows more matches to 
@@ -301,11 +296,14 @@ public:
     {
         bool updated;
         for (size_t i = 0; i < numInstrs; i++) {
-            PPCInstruction& instr = instrBuf[i];
+            PPCInstr& instr = instrBuf[i];
             if (instr.isBranch()) {
                 instr.clearLIField();
             } else if (instr.isSDALoadStoreOrAddi(&updated)) {
                 instr.clearDispField();
+                // Note: In ELF relocatable modules, the A field is cleared for
+                // this kind of instruction, so I ensure that it is cleared for DOLs, too.
+                instr.clearAReg(); 
             } else if (instr.isLisInstr()) {
                 u8 lisReg = instr.d_reg();
                 instr.clearDispField();
@@ -314,7 +312,7 @@ public:
                 // use the same register that lis loaded.
                 // Not a perfect solution, but should help find more matches
                 for (size_t j = i+1; j < numInstrs; j++) {
-                    PPCInstruction& nextInstr = instrBuf[j];
+                    PPCInstr& nextInstr = instrBuf[j];
                     if (nextInstr.isB() && nextInstr.getLIDisp() > skipBlr) {
                         skipBlr = nextInstr.getLIDisp();
                     } else if (nextInstr.isBc() && nextInstr.getBDDisp() > skipBlr) {
@@ -329,17 +327,215 @@ public:
                         || nextInstr.isAddiReg(lisReg)) {
                         nextInstr.clearDispField();
                         if (updated || nextInstr.d_reg() == lisReg) {
-                            if (!(nextInstr.opcode() == PPCInstruction::Opcode::addi 
-                                && nextInstr.a_reg() == lisReg)) {
+                          //  if (!(nextInstr.opcode() == PPCInstr::Opcode::addi 
+                          //      && nextInstr.a_reg() == lisReg)) {
                                 break;
-                            }
+                          //  }
                         }
                     }
                     // decrement
-                    if (skipBlr != 0) skipBlr -= sizeof(PPCInstruction);
+                    if (skipBlr != 0) skipBlr -= sizeof(PPCInstr);
                 }
             }
         }
+    }
+};
+
+class ElfTextSection : public TextSection {
+	Elf32_Ehdr *ehdr;
+	Elf32_Shdr *shStrTabShdr;
+	Elf32_Shdr *symTabShdr;
+	Elf32_Shdr *strTabShdr;
+    Elf32_Shdr *textShdr;
+public:
+    static Elf32_Ehdr *swapEhdr(Elf32_Ehdr *ehdr);
+    static Elf32_Shdr *swapShdr(Elf32_Shdr *shdr);
+    static Elf32_Sym *swapSym(Elf32_Sym *sym);
+
+    ElfTextSection(const char *elfName) 
+        : TextSection(elfName)
+    {
+        baseAddr = 0;
+        
+        if (memcmp(fileBuf, "\177ELF", 4)) {
+            fprintf(stderr, "ERROR: %s is not an ELF file\n", elfName);
+            exit(EXIT_FAILURE);
+        }
+        
+        ehdr = swapEhdr((Elf32_Ehdr *)fileBuf);
+        
+        Elf32_Shdr *shdr;
+        for (u32 i = 0; i < ehdr->e_shnum; i++) {
+            shdr = getSection(i);
+            swapShdr(shdr);
+        }
+        
+        if (ehdr->e_shstrndx != SHN_UNDEF) {
+            shStrTabShdr = getSection(ehdr->e_shstrndx);
+        }
+        
+        char *sname;
+        for (u32 i = 0; i < ehdr->e_shnum; i++) {
+            shdr = getSection(i);
+            sname = getSectionName(shdr->sh_name);
+            if (sname) {
+                if (!strcmp(sname, ".symtab")) {
+                    symTabShdr = shdr;
+                } else if (!strcmp(sname, ".strtab")) {
+                    strTabShdr = shdr;
+                } else if (!strcmp(sname, ".text")) {
+                    textShdr = shdr;
+                    textIndex = i;
+                }
+            }
+        }
+        swapSymbolTable();
+        
+        numInstrs = textShdr->sh_size / sizeof(PPCInstr);
+        for (u32 i = 0; i < numInstrs; i++) {
+            instrBuf.push_back(PPCInstr(&fileBuf[textShdr->sh_offset + i*sizeof(PPCInstr)]));
+        }
+    }
+    
+    Elf32_Shdr *getSection(s32 shndx) const
+    {
+        return (Elf32_Shdr *)(fileBuf + ehdr->e_shoff + ehdr->e_shentsize * shndx);
+    }
+
+    // If this ELF has a .shstrtab section, get the ELF section
+    // name at the specified offset into the section header string table
+    char *getSectionName(u32 offset) const
+    {
+        if (offset && shStrTabShdr) {
+            return (char*)(fileBuf + shStrTabShdr->sh_offset + offset);
+        }
+        return NULL;
+    }
+
+    // If this ELF has a .strtab section, get the ELF symbol name 
+    // at the specified offset into the string table
+    char *getName(u32 offset) const
+    {
+        if (offset && strTabShdr) {
+            return (char*)(fileBuf + strTabShdr->sh_offset + offset);
+        }
+        return NULL;
+    }
+
+    // If this ELF has a .symtab section, get the ELF symbol at the
+    // specified index of the symbol table
+    Elf32_Sym *getSymbol(u32 symTabIndex) const
+    {
+        if (symTabShdr) {
+            return (Elf32_Sym *)(fileBuf + symTabShdr->sh_offset) + symTabIndex;
+        }
+        return NULL;
+    }
+
+    u32 getNumSymbols(void) const
+    {
+        return symTabShdr->sh_size / sizeof(Elf32_Sym);
+    }
+    
+    void swapSymbolTable(void)
+    {
+        if (symTabShdr) {
+            const u32 numSyms = getNumSymbols();
+            for (u32 i = 0; i < numSyms; i++) {
+                Elf32_Sym *sym = getSymbol(i);
+                swapSym(sym);
+            }
+        }
+    }
+    
+    vector<SymInfo> parseSymbols(void)
+    {
+        vector<SymInfo> result;
+        u32 numSyms = getNumSymbols();
+        for (u32 i = 0; i < numSyms; i++) {
+            Elf32_Sym *sym = getSymbol(i);
+            if (ELF32_ST_TYPE(sym->st_info) == STT_FUNC && 
+                sym->st_shndx == textIndex) {
+                SymInfo info(sym->st_value, sym->st_size,
+                        string(getName(sym->st_name)), string());
+                result.push_back(info);
+            }
+        }
+        return result;
+    }
+
+};
+
+Elf32_Ehdr *ElfTextSection::swapEhdr(Elf32_Ehdr *ehdr)
+{
+	ehdr->e_type = swap16(ehdr->e_type);
+	ehdr->e_machine = swap16(ehdr->e_machine);
+	ehdr->e_version = swap32(ehdr->e_version);
+	ehdr->e_entry = swap32(ehdr->e_entry);
+	ehdr->e_phoff = swap32(ehdr->e_phoff);
+	ehdr->e_shoff = swap32(ehdr->e_shoff);
+	ehdr->e_flags = swap32(ehdr->e_flags);
+	ehdr->e_ehsize = swap16(ehdr->e_ehsize);
+	ehdr->e_phentsize = swap16(ehdr->e_phentsize);
+	ehdr->e_phnum = swap16(ehdr->e_phnum);
+	ehdr->e_shentsize = swap16(ehdr->e_shentsize);
+	ehdr->e_shnum = swap16(ehdr->e_shnum);
+	ehdr->e_shstrndx = swap16(ehdr->e_shstrndx);
+	
+	return ehdr;
+}
+
+Elf32_Shdr *ElfTextSection::swapShdr(Elf32_Shdr *shdr)
+{
+	shdr->sh_name = swap32(shdr->sh_name);
+	shdr->sh_type = swap32(shdr->sh_type);
+	shdr->sh_flags = swap32(shdr->sh_flags);
+	shdr->sh_addr = swap32(shdr->sh_addr);
+	shdr->sh_offset = swap32(shdr->sh_offset);
+	shdr->sh_size = swap32(shdr->sh_size);
+	shdr->sh_link = swap32(shdr->sh_link);
+	shdr->sh_info = swap32(shdr->sh_info);
+	shdr->sh_addralign = swap32(shdr->sh_addralign);
+	shdr->sh_entsize = swap32(shdr->sh_entsize);
+	
+	return shdr;
+}
+
+
+Elf32_Sym *ElfTextSection::swapSym(Elf32_Sym *sym)
+{
+	sym->st_name = swap32(sym->st_name);
+	sym->st_value = swap32(sym->st_value);
+	sym->st_size = swap32(sym->st_size);
+	sym->st_shndx = swap16(sym->st_shndx);
+	
+	return sym;
+}
+
+class DolTextSection : public TextSection {
+    static const u32 offSctOffsets = 0;
+    static const u32 offSctAddrs = 0x48;
+    static const u32 offSctLens = 0x90;
+public:    
+    DolTextSection(const DolTextSection& orig) = delete;
+    DolTextSection& operator=(const DolTextSection& orig) = delete;
+
+    // Open the specified DOL and read in its .text section's file offset, size, 
+    // address, and contents while converting to native endianness.
+    
+    DolTextSection(const char *elfName) 
+        : TextSection(elfName)
+    {
+        // Assume section index 1 corresponds to the .text section of the DOL
+        textIndex = 1; 
+        u32 textOffset; // beginning of .text section in the DOL
+        u32 scaledIndex = textIndex * sizeof(PPCInstr);
+        textOffset = be32_to_cpu(&fileBuf[offSctOffsets + scaledIndex]);        
+        numInstrs = be32_to_cpu(&fileBuf[offSctLens + scaledIndex]) / sizeof(PPCInstr);
+        baseAddr = be32_to_cpu(&fileBuf[offSctAddrs + scaledIndex]);
+        
+        for (size_t i = 0; i < numInstrs; i++)
+            instrBuf.push_back(PPCInstr(&fileBuf[textOffset + i*sizeof(PPCInstr)]));
     }
 };
 
@@ -439,79 +635,105 @@ vector<SymInfo> parseMapFile2(const char *fname)
 void debugDump(const DolTextSection& s1, const DolTextSection& s2, u32 addr1, u32 addr2, u32 size)
 {
     ofstream f1("f1.dump"), f2("f2.dump");
-    u32 offset1 = (addr1 - s1.getAbsAddr())/sizeof(PPCInstruction);
-    u32 offset2 = (addr2 - s2.getAbsAddr())/sizeof(PPCInstruction);
-    for (size_t i = 0; i < size/sizeof(PPCInstruction); i++) {
-        f1 << hex << addr1 + i*sizeof(PPCInstruction) << ": " << setfill('0') << setw(2) << right << s1.instrBuf[offset1 + i];
-        f2 << hex << addr2 + i*sizeof(PPCInstruction) << ": " << setfill('0') << setw(2) << right << s2.instrBuf[offset2 + i];
+    u32 offset1 = (addr1 - s1.getBaseAddr())/sizeof(PPCInstr);
+    u32 offset2 = (addr2 - s2.getBaseAddr())/sizeof(PPCInstr);
+    for (size_t i = 0; i < size/sizeof(PPCInstr); i++) {
+        f1 << hex << addr1 + i*sizeof(PPCInstr) << ": " << setfill('0') << setw(2) << right << s1.instrBuf[offset1 + i];
+        f2 << hex << addr2 + i*sizeof(PPCInstr) << ": " << setfill('0') << setw(2) << right << s2.instrBuf[offset2 + i];
     }
 }
 
+void failUsage(void)
+{
+    cerr << "usage: ./dolmatch <searchSymMap>.map <mapType> <searchDol>.dol <targetDol>.dol" << endl;
+    cerr << "  Supported mapTypes:\n    1: Dolphin MAP file\n    2: Brawl format map file" << endl;
+    cerr << "\nor\n./dolmatch <searchElf>.o <targetDol>.dol" << endl;
+    exit(EXIT_FAILURE);
+}
+
+enum Mode
+{
+    DOL_COMPARE, // search another .dol file
+    ELF_COMPARE, // search an ELF .o file
+};
 
 int main(int argc, char *argv[])
 {
+    Mode mode;
     int mapType;
-    if (argc != 5 || !((mapType = atoi(argv[2])) == 1 || mapType == 2)) {
-        cerr << "usage: ./dolmatch <searchSymMap>.map <mapType> <searchDol>.dol <targetDol>.dol" << endl;
-        cerr << "Supported mapTypes:\n\t1: Dolphin MAP file\n\t2: Brawl format map file" << endl;
-        return EXIT_FAILURE;
-    }
-
+    TextSection *searchText, *targetText;
     vector<SymInfo> symbolInfos;
-    if (mapType == 1) {
-        symbolInfos = parseMapFile(argv[1]);
-    } else if (mapType == 2) {
-        symbolInfos = parseMapFile2(argv[1]);
+    if (argc == 5) {
+        mode = DOL_COMPARE;
+        mapType = atoi(argv[2]);
+        if (mapType == 1) {
+            symbolInfos = parseMapFile(argv[1]);
+        } else if (mapType == 2) {
+            symbolInfos = parseMapFile2(argv[1]);
+        } else {
+            failUsage();
+        }
+        searchText = new DolTextSection(argv[3]);
+        targetText = new DolTextSection(argv[4]);
+    } else if (argc == 3) {
+        mode = ELF_COMPARE;
+        ElfTextSection *elf = new ElfTextSection(argv[1]);
+        symbolInfos = elf->parseSymbols();
+        searchText = static_cast<TextSection*>(elf);
+        targetText = new DolTextSection(argv[2]);
+    } else {
+        failUsage();
     }
-    DolTextSection searchDolText(argv[3]);
-    DolTextSection targetDolText(argv[4]);
+    const char *searchName, *targetName;    
+    if (mode == DOL_COMPARE) {
+        searchName = argv[3];
+        targetName = argv[4];
+    } else {
+        searchName = argv[1];
+        targetName = argv[2];
+    }
     
-    searchDolText.clearRelocatedFields();
-    targetDolText.clearRelocatedFields();
+    searchText->clearRelocatedFields();
+    targetText->clearRelocatedFields();
     
-    #if 1 // DEBUG
-        debugDump(searchDolText, targetDolText, 0x801ede0c, 0x8027dedc, 0x910);
+    #if 0 // DEBUG
+        debugDump(searchText, targetText, 0x801ede0c, 0x8027dedc, 0x910);
     #endif
     
-    vector<PPCInstruction> searchFunc;
-    cout << "Begin search for identical functions between " << argv[3] << " and " << argv[4] << ":\n" << endl;
-    cout << "Symbol_Name\t" << argv[3] << "_Address\t" << argv[4] << "_Address\t" << "Func_Size" << endl;
+    vector<PPCInstr> searchFunc;
+    
+    cout << "Begin search for identical functions between " << searchName << " and " << targetName << ":\n" << endl;
+    cout << "Symbol_Name\t" << searchName << "_Address\t" << targetName << "_Address\t" << "Func_Size" << endl;
     u32 matchCount = 0;
     u32 totalMatchSize = 0;
     for (auto sym : symbolInfos) {
-        if (sym.absAddr < searchDolText.getAbsAddr() || 
-            sym.absAddr >= searchDolText.getAbsAddr() + searchDolText.getSize()) {
+        if (sym.absAddr < searchText->getBaseAddr() || 
+            sym.absAddr >= searchText->getBaseAddr() + searchText->getNumInstrs()*sizeof(PPCInstr)) {
             cout << hex << "NOTE: " << sym.name << " is not in the .text section" << endl;
             continue;
         }
         
-        u32 searchOffset = (sym.absAddr - searchDolText.getAbsAddr()) / sizeof(PPCInstruction);
-        u32 searchLen = sym.size / sizeof(PPCInstruction);
-        auto searchStart = searchDolText.instrBuf.begin() + searchOffset;
-        auto searchEnd = searchDolText.instrBuf.begin() + searchOffset + searchLen;
+        u32 searchOffset = (sym.absAddr - searchText->getBaseAddr()) / sizeof(PPCInstr);
+        u32 searchLen = sym.size / sizeof(PPCInstr);
+        auto searchStart = searchText->instrBuf.begin() + searchOffset;
+        auto searchEnd = searchText->instrBuf.begin() + searchOffset + searchLen;
         auto searchResult = 
-            search(targetDolText.instrBuf.begin(), targetDolText.instrBuf.end(), searchStart, searchEnd);
-        if (searchResult != targetDolText.instrBuf.end()) {
+            search(targetText->instrBuf.begin(), targetText->instrBuf.end(), searchStart, searchEnd);
+        if (searchResult != targetText->instrBuf.end()) {
             // found an identical function between DOLs
-            u32 foundFuncAddr = targetDolText.getAbsAddr() + 
-                std::distance(targetDolText.instrBuf.begin(), searchResult) * sizeof(PPCInstruction);
+            u32 foundFuncAddr = targetText->getBaseAddr() + 
+                std::distance(targetText->instrBuf.begin(), searchResult) * sizeof(PPCInstr);
             cout << sym.name << " " << hex << sym.absAddr << " " << foundFuncAddr << " " << sym.size << "\n";
             matchCount++;
             totalMatchSize += sym.size;
         }
     }
     
-    // TODO: if a SDA-relative or lis-relative address is transferred to another
-    // register, then disregard offsets from that register as well
-    
-    // TODO: For every matched pair of functions, get absolute
-    // address targets of every bl instruction in the searchDolText version and mark 
-    // them as matching the corresponding targetDolText version if it's not already done
-    // Do multiple passes until no new matches are found
-    
     cout << "\n\nFound " << dec << matchCount 
-        << " possibly identical functions between " << argv[3] << " and " 
-        << argv[4] << " (0x" << hex << totalMatchSize << " bytes total, " << dec << setprecision(3) 
-        << 100.0 * (totalMatchSize*1.0 / targetDolText.getSize()) << "% of " << argv[4] << "\'s .text section)" << endl;
+        << " possibly identical functions between " << searchName << " and " 
+        << targetName << " (0x" << hex << totalMatchSize << " bytes total, " << dec << setprecision(3) 
+        << 100.0 * (totalMatchSize*1.0 / (targetText->getNumInstrs() * sizeof(PPCInstr))) << "% of " << targetName << "\'s .text section)" << endl;
+    delete searchText;
+    delete targetText;
     return 0;
 }
