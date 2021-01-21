@@ -9,8 +9,8 @@ of the function's location in both DOLs. No `.map` file needs to be provided for
 however, as `dolmatch` will parse the symbols from the ELF object's `.symtab` section instead. Also, 
 the "address" of a function from an ELF object is its starting offset in the `.text` section.
 
-This program may allow one to use a DOL with a symbol table to migrate symbols to
-another DOL for which no symbol table is available. This can be useful when it is
+This program may allow one to use a DOL with a symbol table (`searchDol`) to migrate symbols to
+another DOL for which no symbol table is available (`targetDol`). This can be useful when it is
 likely that both DOLs were linked with the same object code libraries, such as those which
 may be provided by a common SDK.
 
@@ -20,7 +20,8 @@ may be provided by a common SDK.
 
 Supported mapTypes:
   1: Dolphin MAP file
-  2: Brawl format map file
+  2: Brawl format .map file
+  3: mwldeppc .MAP file
 ```
 or
 

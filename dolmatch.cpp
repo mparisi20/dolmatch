@@ -637,6 +637,37 @@ vector<SymInfo> parseMapFile2(const char *fname)
     return symbolInfos;
 }
 
+// parse mwcc's .MAP format
+vector<SymInfo> parseMapFile3(const char *fname)
+{
+    ifstream mapFile(fname);
+    vector<SymInfo> symbolInfos;
+    string line;
+    bool start = false;
+    while (getline(mapFile, line)) {
+        if (start) {
+            istringstream ss(line);
+            u32 discard;
+            string discard_str;
+            u32 absAddr, size;
+            string name;
+            ss >> discard_str >> hex >> size >> absAddr >> discard >> name;
+
+            // skip ".text" module markers
+            if (!ss.fail() && name.length() > 0 && name[0] != '.')
+                symbolInfos.push_back(SymInfo(absAddr, size, name, ""));
+            
+            // NOTE: assumes .ctors section always follows .text
+            if (line.find(".ctors section layout") != std::string::npos)
+                start = false; 
+        }
+        
+        if (line.find(".text section layout") != std::string::npos)
+            start = true;
+    }
+    return symbolInfos;
+}
+
 void debugDump(const DolTextSection& s1, const DolTextSection& s2, u32 addr1, u32 addr2, u32 size)
 {
     ofstream f1("f1.dump"), f2("f2.dump");
@@ -651,7 +682,7 @@ void debugDump(const DolTextSection& s1, const DolTextSection& s2, u32 addr1, u3
 void failUsage(void)
 {
     cerr << "usage: ./dolmatch <searchSymMap>.map <mapType> <searchDol>.dol <targetDol>.dol" << endl;
-    cerr << "  Supported mapTypes:\n    1: Dolphin MAP file\n    2: Brawl format map file" << endl;
+    cerr << "  Supported mapTypes:\n    1: Dolphin MAP file\n    2: Brawl format .map file\n    3: mwldeppc .MAP file" << endl;
     cerr << "\nor\n./dolmatch <searchElf>.o <targetDol>.dol" << endl;
     exit(EXIT_FAILURE);
 }
@@ -675,6 +706,8 @@ int main(int argc, char *argv[])
             symbolInfos = parseMapFile(argv[1]);
         } else if (mapType == 2) {
             symbolInfos = parseMapFile2(argv[1]);
+        } else if (mapType == 3) {
+            symbolInfos = parseMapFile3(argv[1]);
         } else {
             failUsage();
         }
@@ -728,7 +761,7 @@ int main(int argc, char *argv[])
             // found an identical function between DOLs
             u32 foundFuncAddr = targetText->getBaseAddr() + 
                 std::distance(targetText->instrBuf.begin(), searchResult) * sizeof(PPCInstr);
-            cout << sym.name << " " << hex << sym.absAddr << " " << foundFuncAddr << " " << sym.size << "\n";
+            cout << sym.name << " " << hex << sym.absAddr << " " << foundFuncAddr << " " << sym.size << sym.module << "\n";
             matchCount++;
             totalMatchSize += sym.size;
         }
