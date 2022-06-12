@@ -637,9 +637,19 @@ vector<SymInfo> parseMapFile2(const char *fname)
     return symbolInfos;
 }
 
-// parse mwcc's .MAP format
-vector<SymInfo> parseMapFile3(const char *fname)
+// CodeWarrior version
+enum VERSION {
+    // v1.3 through 2.6 linker maps do not include
+    // the "File Offset" field
+    V1_3_2,
+    // v2.7 changed the linker map format
+    V2_7
+};
+
+// parse mwldeppc .MAP format
+vector<SymInfo> parseMapFile3(const char *fname, VERSION ver)
 {
+    constexpr u32 FUNC = 4;
     ifstream mapFile(fname);
     vector<SymInfo> symbolInfos;
     string line;
@@ -647,14 +657,23 @@ vector<SymInfo> parseMapFile3(const char *fname)
     while (getline(mapFile, line)) {
         if (start) {
             istringstream ss(line);
-            u32 discard;
-            string discard_str;
+            u32 startAddr;
+            u32 fileOffset;
+            // NOTE: not sure what this digit represents - is always
+            // "4" for function symbols and "1" for module markers
+            u32 code;
             u32 absAddr, size;
             string name;
-            ss >> discard_str >> hex >> size >> absAddr >> discard >> name;
+            if (ver == V1_3_2) {
+                ss >> hex >> startAddr >> size >> absAddr >>
+                    code >> name;
+            } else if (ver == V2_7) {
+                ss >> hex >> startAddr >> size >> absAddr >>
+                    fileOffset >> code >> name;
+            }
 
             // skip ".text" module markers
-            if (!ss.fail() && name.length() > 0 && name[0] != '.')
+            if (!ss.fail() && name.length() > 0 && code == FUNC && name[0] != '.')
                 symbolInfos.push_back(SymInfo(absAddr, size, name, ""));
             
             // NOTE: assumes .ctors section always follows .text
@@ -682,7 +701,11 @@ void debugDump(const DolTextSection& s1, const DolTextSection& s2, u32 addr1, u3
 void failUsage(void)
 {
     cerr << "usage: ./dolmatch <searchSymMap>.map <mapType> <searchDol>.dol <targetDol>.dol" << endl;
-    cerr << "  Supported mapTypes:\n    1: Dolphin MAP file\n    2: Brawl format .map file\n    3: mwldeppc .MAP file" << endl;
+    cerr << "  Supported mapTypes:\n    "
+        "1: Dolphin MAP file\n    " 
+        "2: Brawl format .map file\n    "
+        "3: mwldeppc (CW v1.3.2 - 2.6) .MAP file\n    "
+        "4: mwldeppc (CW v2.7+) .MAP file" << endl;
     cerr << "\nor\n./dolmatch <searchElf>.o <targetDol>.dol" << endl;
     exit(EXIT_FAILURE);
 }
@@ -707,7 +730,9 @@ int main(int argc, char *argv[])
         } else if (mapType == 2) {
             symbolInfos = parseMapFile2(argv[1]);
         } else if (mapType == 3) {
-            symbolInfos = parseMapFile3(argv[1]);
+            symbolInfos = parseMapFile3(argv[1], V1_3_2);
+        } else if (mapType == 4) {
+            symbolInfos = parseMapFile3(argv[1], V2_7);
         } else {
             failUsage();
         }

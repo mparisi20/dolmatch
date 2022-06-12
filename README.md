@@ -21,7 +21,8 @@ may be provided by a common SDK.
 Supported mapTypes:
   1: Dolphin MAP file
   2: Brawl format .map file
-  3: mwldeppc .MAP file
+  3: mwldeppc (CW v1.3.2 - 2.6) .MAP file
+  4: mwldeppc (CW v2.7+) .MAP file
 ```
 or
 
